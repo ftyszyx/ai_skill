@@ -1,0 +1,6 @@
+{
+  "name": "aiskill",
+  "version": "0.1.0",
+  "description": "AI-powered skills for everyday workflows — YouTube video download and more",
+  "opencli": ">=1.7.8"
+}

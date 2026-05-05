@@ -1,0 +1,9 @@
+{
+  "name": "opencli-plugin-aiskill",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "AI-powered skills for everyday workflows — YouTube video download and more",
+  "peerDependencies": {
+    "@jackwener/opencli": ">=1.7.8"
+  }
+}
