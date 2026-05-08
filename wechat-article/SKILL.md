@@ -1,307 +1,185 @@
----
+﻿---
 name: wechat-article
-version: 1.0.0
-description: "微信公众号文章发布：将飞书文档等内容迁移到微信公众号草稿箱，支持图片上传、代码块格式化、富文本排版。当用户需要将内容发布到微信公众号、编辑公众号文章、插入代码块/图片到公众号编辑器时触发。"
+description: "当需要通过 OpenCLI 处理微信公众号文章时使用：从本地 Markdown/HTML 或飞书/Lark 文档创建带样式的 mp.weixin.qq.com 草稿、上传前转换为公众号友好的 HTML、下载公众号文章、查看草稿、设置封面图，以及排查 OpenCLI 浏览器登录、桥接和 HTML 样式丢失问题。"
 ---
 
-# 微信公众号文章发布
+# 微信公众号文章
 
-本技能指导如何通过 Chrome DevTools MCP 操作微信公众号后台编辑器，实现文章内容的完整迁移和发布。
+使用 `opencli weixin` 处理微信公众号文章。当前流程只创建或检查草稿，不执行群发/发表。
+
+上传文章前，必须先把正文转换成公众号友好的 HTML，并优化内联样式。除非用户明确要求纯文本草稿，否则不要直接上传原始 Markdown。
+
+## 先检查命令
+
+不要假设本机安装的适配器版本，先看实时 help：
+
+```bash
+opencli weixin create-draft --help
+opencli weixin create-draft-html --help
+opencli weixin download --help
+opencli weixin drafts --help
+```
+
+如果缺少 `create-draft-html`，从本 skill 安装本地适配器：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\wechat-article\scripts\install_create_draft_html_adapter.ps1
+opencli validate weixin/create-draft-html
+```
+
+内置的 `opencli weixin create-draft` 会用 `insertText` 插入正文，HTML 标签可能变成纯文本。带样式草稿优先使用 `create-draft-html`。
+
+`create-draft-html` 必须通过富文本粘贴路径写入微信的 ProseMirror 编辑器：派发 `ClipboardEvent('paste')`，同时携带 `text/html` 和 `text/plain`，让 ProseMirror 自己解析 HTML。不要把裸 `document.execCommand('insertHTML')` 当主上传路径；它可能让编辑器看起来填上了内容，但保存后重新打开会变成没有可靠换行和样式的一整段纯文本。
 
 ## 前置条件
 
-- Chrome DevTools MCP 已连接
-- 已登录微信公众号后台（https://mp.weixin.qq.com）
-- 如需迁移飞书文档，需安装 lark-cli 并完成认证
-
-## 编辑器架构
-
-微信公众号使用 **ProseMirror** 作为富文本编辑器。编辑器位于 `.ProseMirror` DOM 节点内。
-
-### 关键行为
-
-- ProseMirror 会 sanitize 通过 `execCommand('insertHTML')` 插入的 HTML
-- 全局变量：`__MpEditor`（React 组件类）、`$EDITORUI`、`editorVarGlobal`
-- 正文字数显示在 `uid` 对应 "正文字数" 的 StaticText 节点
-- 草稿 ID 即 URL 中的 `appmsgid` 参数
-
-### HTML 标签存活表
-
-| 标签 | 是否保留 | 说明 |
-|------|---------|------|
-| `<h2>`, `<h3>` | ✅ 保留 | heading 标签存活，但 `<h1>` 不推荐使用 |
-| `<p>` | ✅ 保留 | 行内 style 样式生效 |
-| `<blockquote>` | ✅ 保留 | 引用块 |
-| `<table>`, `<thead>`, `<tbody>`, `<tr>`, `<th>`, `<td>` | ✅ 保留 | 表格完整存活 |
-| `<div>` | ✅ 保留 | 行内 style 样式生效（用于代码块） |
-| `<span>` | ✅ 保留 | 行内样式存活（用于代码高亮） |
-| `<a>` | ✅ 保留 | 链接；会被加上 `class="normal_text_link"` |
-| `<img>` | ✅ 保留 | `style` 属性保留；自动添加 `contenteditable="false"` |
-| `<code>` | ✅ 保留 | 行内代码样式存活 |
-| `<br>` | ✅ 保留 | 代码块换行必须用 `<br>` |
-| `<strong>`, `<b>` | ✅ 保留 | 加粗 |
-| `<ul>`, `<ol>`, `<li>` | ⚠️ 合并 | 相邻的 `<ul>` 会被 ProseMirror 合并为一个列表 |
-| `<pre>` | ❌ 丢失 | 换行符被吃掉，改用 `<div>` + `<br>` |
-
-### CSS 规则
-
-- **仅行内 CSS 生效**：必须使用 `style="..."` 属性
-- **外部/内嵌样式表不生效**：`<style>` 标签和外部 CSS 文件会被过滤
-- **样式属性限制**：部分 CSS 属性可能被过滤，建议只用基础属性
-
-## 内容插入
-
-### 基本方法
-
-通过 `execCommand('insertHTML')` 插入 HTML 内容：
-
-```javascript
-const pm = document.querySelector('.ProseMirror');
-pm.focus();
-document.execCommand('insertHTML', false, htmlString);
-```
-
-### 清空编辑器
-
-```javascript
-const pm = document.querySelector('.ProseMirror');
-pm.focus();
-const range = document.createRange();
-range.selectNodeContents(pm);
-const sel = window.getSelection();
-sel.removeAllRanges();
-sel.addRange(range);
-document.execCommand('delete', false, null);
-```
-
-### 插入策略
-
-1. **整篇文章一次性插入**：推荐使用单次 `insertHTML` 插入完整 HTML，避免多次调用导致的列表合并等问题
-2. **避免 `<ul>/<li>`**：用 `<p style="padding-left:20px;">• 内容</p>` 替代，防止相邻列表被错位合并
-3. **先验证 HTML**：可以用小段测试 HTML 验证标签存活情况后再完整插入
-
-## 代码块
-
-ProseMirror 会丢弃 `<pre><code>` 内的换行符，必须使用 `<div>` + `<br>` 方案：
-
-```html
-<div style="background:#282c34;color:#abb2bf;padding:16px;border-radius:8px;
-  font-family:Consolas,Monaco,Courier New,monospace;font-size:13px;
-  line-height:1.7;overflow-x:auto;margin:12px 0;">
-<span style="color:#98c379;"># 注释</span><br>
-命令内容<br>
-</div>
-```
-
-颜色方案参考：
-- 背景：`#282c34`（One Dark 风格）
-- 注释：`#98c379`（绿色）
-- 关键字：`#c678dd`（紫色）
-- 字符串：`#98c379`（绿色）
-- 函数/属性：`#56b6c2`（青色）
-- 数值：`#d19a66`（橙色）
-
-## 标题和排版
-
-### 二级标题
-
-```html
-<h2 style="color:#1a73e8;border-bottom:2px solid #1a73e8;
-  padding-bottom:8px;margin-top:24px;">标题文本</h2>
-```
-
-### 三级标题
-
-```html
-<h3 style="color:#333;margin-top:20px;">子标题</h3>
-```
-
-### 引用块
-
-```html
-<blockquote style="border-left:4px solid #1a73e8;padding:8px 16px;
-  margin:12px 0;background:#f0f7ff;color:#555;">引用内容</blockquote>
-```
-
-### 正文段落
-
-```html
-<p style="color:#444;line-height:1.8;">正文内容</p>
-```
-
-### 行内代码
-
-```html
-<code style="background:#f0f0f0;padding:1px 4px;border-radius:3px;">code</code>
-```
-
-## 表格
-
-ProseMirror 保留完整表格结构，支持 `<thead>` / `<tbody>` 语义标签：
-
-```html
-<table style="border-collapse:collapse;width:100%;margin:12px 0;font-size:14px;">
-  <thead>
-    <tr style="background:#e8f0fe;">
-      <th style="border:1px solid #ddd;padding:10px 12px;text-align:left;">列名</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td style="border:1px solid #ddd;padding:10px 12px;">数据</td>
-    </tr>
-  </tbody>
-</table>
-```
-
-## 图片上传
-
-### 上传机制
-
-微信公众号使用隐藏的文件输入框上传图片到 `mmbiz.qpic.cn` CDN：
-
-```javascript
-// 找到隐藏的 file input
-const fi = document.querySelector('input[type="file"][name="file"]');
-```
-
-### 上传流程
-
-1. 点击编辑器工具栏的"图片"按钮，打开图片选择器
-2. 使用 Chrome DevTools MCP 的 `upload_file` 工具将图片设置到隐藏的 file input
-3. 派发 `change` 事件触发上传：
-
-```javascript
-const fi = document.querySelector('input[type="file"][name="file"]');
-// upload_file MCP 工具设置文件后
-fi.dispatchEvent(new Event('change', { bubbles: true }));
-```
-
-4. 等待上传完成（ProseMirror 自动插入图片节点）
-5. 从 ProseMirror 中获取 CDN URL：
-
-```javascript
-const imgs = document.querySelectorAll('.ProseMirror img.rich_pages.wxw-img');
-const urls = Array.from(imgs).map(img => img.src);
-```
-
-### 图片定位策略
-
-每次点击"图片"按钮上传后，图片出现在光标位置。由于重复点击图片按钮比较繁琐，推荐采用 **"先上传收集 URL，再一次性 rebuild"** 策略：
-
-1. 依次上传所有图片（每次需先点击工具栏"图片"按钮）
-2. 记录每次上传后的 CDN URL（ProseMirror 中最新出现的 img）
-3. 清空编辑器
-4. 用 `<img>` 标签在正确位置引用 CDN URL，一次性插入完整 HTML
-
-### 从飞书文档导出图片
+创建或查看草稿前，先检查浏览器桥接：
 
 ```bash
-# 1. 获取文档内容，提取 image token
-lark-cli docs +fetch --doc "https://xxx.feishu.cn/wiki/Dg6R..." --format json
-
-# 2. 下载图片到本地
-lark-cli docs +media-download --token <image_token> --output ./img_name.png
+opencli doctor
 ```
 
-图片 token 在飞书文档 markdown 中以 `<image token="QEFlbd..."/>` 形式出现。
+如果扩展未连接，让用户打开 Chrome 并启用/连接 OpenCLI 扩展，然后重跑 `opencli doctor`。
 
-## 完整发布工作流
-
-### 1. 打开目标文章
-
-导航到微信公众号后台的文章编辑页：
-```
-https://mp.weixin.qq.com/cgi-bin/appmsg?t=media/appmsg_edit&action=edit&appmsgid=<draft_id>&type=77&lang=zh_CN
-```
-
-### 2. 准备图片（如从飞书迁移）
+如果创建草稿失败并提示 `Could not extract session token`，打开微信公众号后台让用户登录：
 
 ```bash
-# 获取文档 markdown，提取所有 image token
-lark-cli docs +fetch --doc "https://xxx.feishu.cn/wiki/..." --format json
-
-# 下载每张图片
-lark-cli docs +media-download --token <token1> --output ./img1.png
-lark-cli docs +media-download --token <token2> --output ./img2.png
+opencli browser open "https://mp.weixin.qq.com" --focus
+opencli browser get url
 ```
 
-### 3. 上传图片到微信 CDN
+登录后的 URL 应包含 `token=<number>`。
 
-采用 CDN URL 收集策略（详见"图片上传"章节）：
-1. 点击工具栏"图片"按钮 → upload_file → dispatchEvent('change') → 等待上传
-2. 获取最新的 CDN URL
-3. 重复直到所有图片上传完毕
+## 转换为带样式 HTML
 
-### 4. 构建并插入文章 HTML
+先准备本地 Markdown 正文，再转换：
 
-根据内容构建完整 HTML（遵循"内容插入"和"代码块"章节的格式规则），一次性插入：
-
-```javascript
-const pm = document.querySelector('.ProseMirror');
-pm.focus();
-// 清空
-const range = document.createRange();
-range.selectNodeContents(pm);
-window.getSelection().removeAllRanges();
-window.getSelection().addRange(range);
-document.execCommand('delete', false, null);
-
-// 构建并插入完整 HTML
-const html = '<p style="text-align:center;"><img src="'+cdnUrl+'" ...></p>' +
-  '<h2 style="color:#1a73e8;border-bottom:2px solid #1a73e8;...">标题</h2>' +
-  // ... 完整文章
-  '';
-document.execCommand('insertHTML', false, html);
+```powershell
+python .\wechat-article\scripts\md_to_wechat_html.py `
+  .\wechat-article-content.md `
+  .\wechat-article-content.html `
+  --drop-first-title `
+  --drop-first-image
 ```
 
-### 5. 保存草稿
+当标题已经通过 `--title` 传给公众号草稿时，使用 `--drop-first-title`。
+当同一张图已经通过 `--cover-image` 作为封面上传时，使用 `--drop-first-image`，避免正文重复出现封面图。
 
-点击"保存为草稿"按钮（uid 对应 "保存为草稿"），等待出现"已保存"提示。
+转换器会输出带内联 CSS 的 `<section>` 结构，适配微信编辑器：正文有字号和行高，标题、引用、列表、图片、分隔线、加粗等都有基础样式。
 
-### 6. 设置封面图（可选）
+段落优先使用 `<section style="...">`，不要只依赖弱样式的 `<p>`。每个段落块都应显式包含 `line-height`、`font-size`、`color`、`margin` 等内联样式，微信编辑器更容易保留。
 
-页面顶部的"编辑封面"区域需要单独上传封面图。封面图与正文内联图片是不同的上传入口。
+## 创建带样式草稿
 
-### 7. 预览和发表
+优先把生成的 HTML 文件传给 `opencli weixin create-draft-html`：
 
-- **预览**：点击"预览"按钮，输入微信号发送到手机查看效果
-- **发表**：确认无误后点击"发表"
+```powershell
+opencli weixin create-draft-html `
+  --title "Title" `
+  --summary "Summary" `
+  --cover-image ".\cover.png" `
+  -f json `
+  "@.\wechat-article-content.html"
+```
 
-## 常见问题
+使用 `@path` 传 HTML 文件，避免命令行引号、换行和长度问题。
 
-### 代码块没有换行
+`create-draft-html` 的返回结果应包含非零的富文本指标，例如 `blocks=68, styled=67`。只有 `draft saved` 但没有块数量和样式数量，不足以证明样式上传成功。
 
-**原因**：ProseMirror 解析 `<pre><code>` 时会丢弃 `\n` 换行符。
+## 纯文本兜底
 
-**解决**：使用 `<div>` + `<br>` 替代。详见"代码块"章节。
+只有在 `create-draft-html` 不可用或明确要纯文本时，才使用内置 `create-draft`：
 
-### 子弹列表位置错乱
+```bash
+opencli weixin create-draft "<content>" \
+  --title "Title" \
+  --author "Author" \
+  --summary "Summary" \
+  --cover-image ".\cover.png" \
+  -f json
+```
 
-**原因**：ProseMirror 会合并相邻的 `<ul>` 元素，导致不同章节的列表项混在一起。
+注意：
 
-**解决**：用 `<p style="padding-left:20px;">• 内容</p>` 模拟列表，避免使用 `<ul>/<li>`。
+- `--title` 必填，最长 64 字符。
+- `--author` 可选，用户未提供时不要自行编造。
+- `--summary` 可选。
+- `--cover-image` 必须是真实存在的本地图片路径。适配器会先把它上传到正文，再从正文图片中设为封面。
+- 这个兜底路径会用 `insertText` 插入正文，Markdown 或 HTML 可能变成纯文本。创建后必须检查微信编辑器。
 
-### 标题样式不显示
+## 从飞书/Lark 文档创建草稿
 
-**原因**：`<h1>` 标签可能被 ProseMirror 过滤。
+源文档是飞书/Lark 时，先用 `lark-doc` 拉取 Markdown：
 
-**解决**：使用 `<h2>` 和 `<h3>`，并确保 style 属性是标准 CSS（用分号分隔，属性名无前缀）。
+```bash
+lark-cli docs +fetch --api-version v2 \
+  --doc "<feishu-doc-or-wiki-url>" \
+  --doc-format markdown \
+  --detail simple
+```
 
-### 图片上传后出现重复
+推荐流程：
 
-**原因**：微信的图片上传 handler 可能为每次上传生成 2 个 ProseMirror image 节点。
+1. 提取 `data.document.content`。
+2. 保存为本地 `.md` 文件，避免命令行转义和长度问题。
+3. 用 `scripts/md_to_wechat_html.py` 转成带样式 `.html`。
+4. 如果同时传 `--cover-image`，转换时加 `--drop-first-image`，避免正文重复封面图。
+5. 把 HTML 文件传给 `opencli weixin create-draft-html`。
 
-**解决**：上传阶段容忍重复；最终通过 `selectAll` + `delete` + 完整 HTML 重建来清理。
+PowerShell 示例：
 
-### 正文字数显示 0
+```powershell
+$json = lark-cli docs +fetch --api-version v2 --doc "<feishu-url>" --doc-format markdown --detail simple | ConvertFrom-Json
+$content = $json.data.document.content
+Set-Content -Encoding UTF8 .\wechat-article-content.md $content
 
-**原因**：字数统计可能有延迟。
+python .\wechat-article\scripts\md_to_wechat_html.py `
+  .\wechat-article-content.md `
+  .\wechat-article-content.html `
+  --drop-first-title `
+  --drop-first-image
 
-**解决**：保存草稿后会自动刷新；也可点击编辑器触发更新。
+opencli weixin create-draft-html `
+  --title "Title" `
+  --cover-image ".\cover.png" `
+  -f json `
+  "@.\wechat-article-content.html"
+```
 
-## 参考
+## 下载已有公众号文章
 
-- [ProseMirror 文档](https://prosemirror.net/docs/guide/)
-- [微信公众号后台](https://mp.weixin.qq.com)
-- 飞书文档迁移配合 [`lark-doc`](https://github.com/anthropics/claude-code) Skills
+用 `opencli weixin download` 把已有公众号文章导出为 Markdown：
+
+```bash
+opencli weixin download --url "https://mp.weixin.qq.com/s/..." --output ".\weixin-articles" --download-images true -f json
+```
+
+迁移旧文章时，可把下载得到的 Markdown 作为重新创建草稿的来源。
+
+## 验证结果
+
+创建草稿后，先查看草稿箱：
+
+```bash
+opencli weixin drafts --limit 5 -f json
+```
+
+向用户报告草稿标题和更新时间。
+
+对样式敏感的 HTML 草稿，必须重新打开最新草稿，在微信编辑器里检查 `.ProseMirror`：
+
+```bash
+opencli browser eval "(()=>({blocks:document.querySelector('.ProseMirror')?.querySelectorAll('p,section,h1,h2,h3,blockquote,li').length||0,styled:document.querySelector('.ProseMirror')?.querySelectorAll('[style]').length||0,text:document.querySelector('.ProseMirror')?.innerText.slice(0,200)||''}))()"
+```
+
+健康的带样式文章重新打开后，应该有较多 block 节点和较多带 `style` 的节点。如果 `.ProseMirror.innerText` 有整篇文章，但 `blocks` 或 `styled` 接近 0，说明上传实际上变成了纯文本；应使用修复后的 `create-draft-html` 重新创建草稿。
+
+## 常见故障
+
+- `Browser Bridge extension not connected`：运行 `opencli doctor`；用户需要连接 OpenCLI Chrome 扩展。
+- `Unknown command create-draft-html`：运行 `scripts/install_create_draft_html_adapter.ps1`，再执行 `opencli validate weixin/create-draft-html`。
+- `Could not extract session token`：用户未登录 `mp.weixin.qq.com`；用 `opencli browser open "https://mp.weixin.qq.com" --focus` 打开后台登录。
+- `Image not found`：检查当前工作目录下的 `--cover-image` 路径是否存在。
+- HTML 标签直接显示在正文里：使用了纯文本 `create-draft`；改用 `create-draft-html` 重新创建。
+- 上传后没有换行或没有样式：HTML 可能通过裸 `insertHTML` 或 `insertText` 插入，而不是 ProseMirror 富文本粘贴。重新安装 `scripts/install_create_draft_html_adapter.ps1`，重新生成 HTML，重新创建草稿，并验证重新打开后的 `blocks>1` 和 `styled>1`。
+- `Article editor did not load`：登录可能过期；手动打开微信公众号后台后重试。

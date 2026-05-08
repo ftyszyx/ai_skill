@@ -1,0 +1,4 @@
+interface:
+  display_name: "招财猫风格"
+  short_description: "把市场复盘稿改成辛辣、口语化的个人公众号风格"
+  default_prompt: "Use $zhaocai-cat-style to rewrite this market-review draft into a punchy personal公众号复盘稿."
