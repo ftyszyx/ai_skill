@@ -1,0 +1,4 @@
+interface:
+  display_name: "GPT Imagegen"
+  short_description: "Generate images with gpt-image-2 via proxy."
+  default_prompt: "Use $gpt-imagegen to generate a PNG image with gpt-image-2 and save it into my workspace."
