@@ -1,6 +1,6 @@
 ---
 name: gpt-imagegen
-description: 使用 gpt-image-2 通过 OpenAI Images API 或 OpenAI 兼容代理生成栅格图片。适用于用户要求用 gpt-image-2 创建、生成或保存图片，并要求从环境变量读取 API key 与 base URL，将输出保存为工作区中的 PNG、JPEG 或 WebP 文件时。
+description: 使用 gpt-image-2 通过 OpenAI Python SDK 和 Images API 流式生成栅格图片，默认 stream=true 且 partial_images=3。适用于用户要求用 gpt-image-2 创建、生成或保存图片，并要求从环境变量读取 API key 与 base URL，将最终图和 partial images 保存为工作区中的 PNG、JPEG 或 WebP 文件时。
 ---
 
 # GPT Imagegen
@@ -8,6 +8,14 @@ description: 使用 gpt-image-2 通过 OpenAI Images API 或 OpenAI 兼容代理
 ## 快速开始
 
 使用 `scripts/generate_image.py` 执行稳定可复用的图片生成流程。脚本会从环境变量读取 `OPENAI_API_KEY` 和 `OPENAI_BASE_URL`，不会打印密钥，也不会内置任何固定代理地址。`BASE_URL` 可作为 `OPENAI_BASE_URL` 的兼容别名。
+
+脚本默认使用官方文档里的流式生成方式：`stream=True`，`partial_images=3`。生成过程中会保存 partial images，结束后把最终图写到 `--out`。
+
+依赖 OpenAI Python SDK：
+
+```powershell
+python -m pip install --upgrade openai
+```
 
 用户需要先在本机配置环境变量：
 
@@ -36,8 +44,11 @@ python <skill-dir>\scripts\generate_image.py `
 - `model`: `gpt-image-2`
 - `base-url`: 从 `OPENAI_BASE_URL` 读取；兼容 `BASE_URL`
 - `api-key`: 从 `OPENAI_API_KEY` 读取
+- `background`: `auto`
 - `size`: `1024x1024`
 - `quality`: `medium`
+- `stream`: `true`
+- `partial_images`: `3`
 - `output-format`: 从 `--out` 后缀推断；无法推断时使用 `png`
 
 ## 工作流程
@@ -45,10 +56,11 @@ python <skill-dir>\scripts\generate_image.py `
 1. 只有在关键信息缺失时才追问用户；否则根据用户请求整理一个清晰、得体的图片 prompt。
 2. 在当前工作区中选择输出路径，通常使用 `output/imagegen/<描述性文件名>.png`。
 3. 确认用户已在环境变量中配置 `OPENAI_API_KEY` 和 `OPENAI_BASE_URL`。不要要求用户把 key 发到聊天里，也不要打印 key。
-4. 优先使用本 skill 自带脚本，不要重复手写 HTTP 请求代码。
+4. 优先使用本 skill 自带脚本和 OpenAI Python SDK，不要重复手写 HTTP 请求代码。
 5. 不要把真实 base URL 或 API key 写入 skill、脚本、仓库文件或聊天记录。若必须临时覆盖 base URL，可使用 `--base-url`，但长期配置仍应放在环境变量中。
-6. 生成完成后，尽可能用图片查看工具检查输出图片是否正常。
-7. 最终回复中给出保存的绝对路径；如果客户端支持本地图片渲染，同时展示图片。
+6. 默认保留流式 partial images：`<输出文件名>-partial-<索引>.<后缀>`。如果用户不需要中间图，可传 `--no-save-partials`。
+7. 生成完成后，尽可能用图片查看工具检查输出图片是否正常。
+8. 最终回复中给出最终图和 partial images 的绝对路径；如果客户端支持本地图片渲染，同时展示最终图。
 
 ## 常用命令
 
@@ -60,6 +72,15 @@ python <skill-dir>\scripts\generate_image.py `
   --out E:\opensource\mywork\my_image\output\imagegen\kitten.png
 ```
 
+指定保存 partial images 的目录：
+
+```powershell
+python <skill-dir>\scripts\generate_image.py `
+  --prompt "一只小猫坐在窗边，柔和自然光，无文字，无水印" `
+  --out E:\opensource\mywork\my_image\output\imagegen\kitten.png `
+  --partials-dir E:\opensource\mywork\my_image\output\imagegen\partials
+```
+
 使用 prompt 文件生成长提示词图片：
 
 ```powershell
@@ -69,10 +90,26 @@ python <skill-dir>\scripts\generate_image.py `
   --quality high
 ```
 
+生成透明背景 PNG：
+
+```powershell
+python <skill-dir>\scripts\generate_image.py `
+  --prompt "一个干净的产品贴纸图标，主体完整居中，无文字，无水印" `
+  --background transparent `
+  --output-format png `
+  --out E:\path\to\sticker.png
+```
+
 只预览请求，不真正发送 API 调用：
 
 ```powershell
 python <skill-dir>\scripts\generate_image.py --prompt "test kitten" --out E:\tmp\kitten.png --dry-run
+```
+
+临时关闭流式生成：
+
+```powershell
+python <skill-dir>\scripts\generate_image.py --prompt "一只小猫" --out E:\tmp\kitten.png --no-stream
 ```
 
 如需使用非默认环境变量名：
@@ -100,12 +137,14 @@ python <skill-dir>\scripts\generate_image.py `
 遇到以下情况时，读取 `references/api-workflow.md`：
 
 - `OPENAI_BASE_URL` 或 `OPENAI_API_KEY` 不可见。
+- 缺少或需要升级 `openai` Python 包。
 - 代理 base URL 调用失败，或需要确认 endpoint 拼接方式。
-- 响应不是 `b64_json`。
+- 流式事件没有返回 `b64_json`。
 - OpenAI 官方接口和代理支持的模型或参数不一致。
 
 常见修复：
 
 - 如果缺少 `OPENAI_API_KEY` 或 `OPENAI_BASE_URL`，让用户在本机设置环境变量并重启 shell，或为当前进程设置环境变量。
+- 如果报缺少 `openai` 包，运行 `python -m pip install --upgrade openai`。
 - 如果 PowerShell 的 `Invoke-RestMethod` 出现 TLS send error，优先使用本 skill 的 Python 脚本。
 - 如果代理同时支持 `/v1/images/generations` 和 `/images/generations`，优先使用脚本默认的 `/v1` 归一化方式。
