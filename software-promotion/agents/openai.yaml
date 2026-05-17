@@ -1,0 +1,7 @@
+interface:
+  display_name: "软件推广"
+  short_description: "多平台软件推广草稿与合规 GitHub 投稿"
+  default_prompt: "使用 $software-promotion 帮我把这个软件整理成多平台推广草稿，并按合规边界创建 GitHub 推广资产。"
+
+policy:
+  allow_implicit_invocation: true
