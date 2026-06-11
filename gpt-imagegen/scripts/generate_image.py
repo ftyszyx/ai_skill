@@ -14,6 +14,31 @@ from pathlib import Path
 from typing import Any
 
 
+def default_config_path() -> Path:
+    return Path(__file__).resolve().parents[1] / "config.local.json"
+
+
+def load_config(path: str | None) -> dict[str, Any]:
+    config_path = Path(path) if path else default_config_path()
+    if not config_path.exists():
+        return {}
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"Config file is not valid JSON: {config_path} ({exc})") from exc
+    if not isinstance(data, dict):
+        raise SystemExit(f"Config file must contain a JSON object: {config_path}")
+    return data
+
+
+def config_value(config: dict[str, Any], *names: str) -> str | None:
+    for name in names:
+        value = config.get(name)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def read_windows_user_env(name: str) -> str | None:
     if os.name != "nt":
         return None
@@ -176,6 +201,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt", help="Image prompt text.")
     parser.add_argument("--prompt-file", help="UTF-8 text file containing the image prompt.")
     parser.add_argument("--out", required=True, help="Output image path.")
+    parser.add_argument("--config", help="JSON config file. Defaults to gpt-imagegen/config.local.json.")
     parser.add_argument("--base-url", help="API base URL override. Prefer configuring an environment variable.")
     parser.add_argument("--base-url-env", default="OPENAI_BASE_URL", help="Environment variable that stores the API base URL.")
     parser.add_argument("--model", default="gpt-image-2")
@@ -198,9 +224,18 @@ def main() -> int:
     out_path = Path(args.out)
     prompt = read_prompt(args)
     output_format = infer_format(out_path, args.output_format)
-    base_url = args.base_url or get_base_url(args.base_url_env)
+    config = load_config(args.config)
+    base_url = (
+        args.base_url
+        or config_value(config, "base_url", "openai_base_url")
+        or get_base_url(args.base_url_env)
+    )
     if not base_url:
-        raise SystemExit(f"{args.base_url_env} is missing. Set it to your OpenAI-compatible API base URL.")
+        config_hint = args.config or str(default_config_path())
+        raise SystemExit(
+            "API base URL is missing. Set --base-url, "
+            f"configure base_url in {config_hint}, or set {args.base_url_env}."
+        )
     sdk_base_url = normalize_sdk_base_url(base_url)
     payload = request_payload(args, prompt, output_format)
 
@@ -210,9 +245,13 @@ def main() -> int:
         print(json.dumps({"base_url": sdk_base_url, "out": str(out_path), "payload": preview}, indent=2))
         return 0
 
-    api_key = get_env(args.api_key_env)
+    api_key = config_value(config, "api_key", "openai_api_key") or get_env(args.api_key_env)
     if not api_key:
-        raise SystemExit(f"{args.api_key_env} is missing.")
+        config_hint = args.config or str(default_config_path())
+        raise SystemExit(
+            "API key is missing. Configure api_key in "
+            f"{config_hint}, or set {args.api_key_env}."
+        )
 
     OpenAI = load_openai_client()
     client = OpenAI(api_key=api_key, base_url=sdk_base_url, timeout=args.timeout)

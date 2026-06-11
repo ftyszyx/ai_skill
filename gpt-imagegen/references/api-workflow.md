@@ -6,18 +6,31 @@
 
 
 
-## 环境变量
+## 本地配置与环境变量
 
-必须由用户在本机配置：
+脚本默认读取 `gpt-imagegen/config.local.json`：
+
+```json
+{
+  "api_key": "你的 API key",
+  "base_url": "你的 OpenAI 兼容 API base URL"
+}
+```
+
+`config.local.json` 是本机私有配置，必须加入 `.gitignore`，不要提交真实密钥。仓库中只保留 `config.example.json` 作为模板。
+
+也可以由用户在本机配置环境变量：
 
 ```powershell
 [Environment]::SetEnvironmentVariable("OPENAI_API_KEY", "你的 API key", "User")
 [Environment]::SetEnvironmentVariable("OPENAI_BASE_URL", "你的 OpenAI 兼容 API base URL", "User")
 ```
 
+读取优先级为：命令行参数 `--base-url` > 配置文件 `base_url` > 环境变量 `OPENAI_BASE_URL` / `BASE_URL`。API key 优先从配置文件 `api_key` 读取，其次从 `OPENAI_API_KEY` 读取。
+
 `BASE_URL` 可作为 `OPENAI_BASE_URL` 的兼容别名。推荐统一使用 `OPENAI_BASE_URL`。
 
-不要把真实 API key 或 base URL 写入 skill、脚本、仓库文件或聊天记录。
+不要把真实 API key 写入 skill、脚本、示例配置、提交文件或聊天记录。
 
 ## 依赖
 
@@ -135,13 +148,13 @@ $env:OPENAI_BASE_URL = [Environment]::GetEnvironmentVariable("OPENAI_BASE_URL", 
 
 ## 故障排查
 
-`OPENAI_BASE_URL is missing`
+`API base URL is missing`
 
-用户没有在环境变量中配置 base URL，或当前进程读不到。让用户设置 `OPENAI_BASE_URL`，或确认 Windows 用户环境变量已写入。
+用户没有在 `config.local.json` 或环境变量中配置 base URL，或当前进程读不到。让用户填写 `gpt-imagegen/config.local.json`，或设置 `OPENAI_BASE_URL`。
 
-`OPENAI_API_KEY is missing`
+`API key is missing`
 
-用户没有在环境变量中配置 API key，或当前进程读不到。让用户在本机设置环境变量，不要让用户把 key 发到聊天里。
+用户没有在 `config.local.json` 或环境变量中配置 API key，或当前进程读不到。让用户在本机填写配置或设置环境变量，不要让用户把 key 发到聊天里。
 
 `The openai Python package is required`
 

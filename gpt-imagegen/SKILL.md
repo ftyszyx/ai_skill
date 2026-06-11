@@ -7,7 +7,7 @@ description: 使用 gpt-image-2 通过 OpenAI Python SDK 和 Images API 流式�
 
 ## 快速开始
 
-使用 `scripts/generate_image.py` 执行稳定可复用的图片生成流程。脚本会从环境变量读取 `OPENAI_API_KEY` 和 `OPENAI_BASE_URL`，不会打印密钥，也不会内置任何固定代理地址。`BASE_URL` 可作为 `OPENAI_BASE_URL` 的兼容别名。
+使用 `scripts/generate_image.py` 执行稳定可复用的图片生成流程。脚本默认会读取 `gpt-imagegen/config.local.json`，也兼容从环境变量读取 `OPENAI_API_KEY` 和 `OPENAI_BASE_URL`。脚本不会打印密钥，也不会内置任何固定代理地址。`BASE_URL` 可作为 `OPENAI_BASE_URL` 的兼容别名。
 
 脚本默认使用官方文档里的流式生成方式：`stream=True`，`partial_images=3`。生成过程中会保存 partial images，结束后把最终图写到 `--out`。
 
@@ -17,7 +17,24 @@ description: 使用 gpt-image-2 通过 OpenAI Python SDK 和 Images API 流式�
 python -m pip install --upgrade openai
 ```
 
-用户需要先在本机配置环境变量：
+推荐先复制配置模板：
+
+```powershell
+Copy-Item gpt-imagegen\config.example.json gpt-imagegen\config.local.json
+```
+
+然后编辑 `gpt-imagegen/config.local.json`：
+
+```json
+{
+  "api_key": "你的 API key",
+  "base_url": "你的 OpenAI 兼容 API base URL"
+}
+```
+
+`config.local.json` 已加入 `.gitignore`，用于保存本机私有配置，不要提交真实密钥。
+
+也可以使用环境变量：
 
 ```powershell
 [Environment]::SetEnvironmentVariable("OPENAI_API_KEY", "你的 API key", "User")
@@ -42,8 +59,8 @@ python <skill-dir>\scripts\generate_image.py `
 脚本默认值：
 
 - `model`: `gpt-image-2`
-- `base-url`: 从 `OPENAI_BASE_URL` 读取；兼容 `BASE_URL`
-- `api-key`: 从 `OPENAI_API_KEY` 读取
+- `base-url`: 优先从 `gpt-imagegen/config.local.json` 读取；否则从 `OPENAI_BASE_URL` 读取，兼容 `BASE_URL`
+- `api-key`: 优先从 `gpt-imagegen/config.local.json` 读取；否则从 `OPENAI_API_KEY` 读取
 - `background`: `auto`
 - `size`: `1024x1024`
 - `quality`: `medium`
@@ -55,9 +72,9 @@ python <skill-dir>\scripts\generate_image.py `
 
 1. 只有在关键信息缺失时才追问用户；否则根据用户请求整理一个清晰、得体的图片 prompt。
 2. 在当前工作区中选择输出路径，通常使用 `output/imagegen/<描述性文件名>.png`。
-3. 确认用户已在环境变量中配置 `OPENAI_API_KEY` 和 `OPENAI_BASE_URL`。不要要求用户把 key 发到聊天里，也不要打印 key。
+3. 确认用户已在 `gpt-imagegen/config.local.json` 或环境变量中配置 `api_key` 和 `base_url`。不要要求用户把 key 发到聊天里，也不要打印 key。
 4. 优先使用本 skill 自带脚本和 OpenAI Python SDK，不要重复手写 HTTP 请求代码。
-5. 不要把真实 base URL 或 API key 写入 skill、脚本、仓库文件或聊天记录。若必须临时覆盖 base URL，可使用 `--base-url`，但长期配置仍应放在环境变量中。
+5. 不要把真实 API key 写入 skill、脚本、示例配置、提交文件或聊天记录。长期配置应放在被忽略的 `config.local.json` 或本机环境变量中。
 6. 默认保留流式 partial images：`<输出文件名>-partial-<索引>.<后缀>`。如果用户不需要中间图，可传 `--no-save-partials`。
 7. 生成完成后，尽可能用图片查看工具检查输出图片是否正常。
 8. 最终回复中给出最终图和 partial images 的绝对路径；如果客户端支持本地图片渲染，同时展示最终图。
@@ -118,6 +135,15 @@ python <skill-dir>\scripts\generate_image.py --prompt "一只小猫" --out E:\tm
 python <skill-dir>\scripts\generate_image.py `
   --api-key-env MY_IMAGE_API_KEY `
   --base-url-env MY_IMAGE_BASE_URL `
+  --prompt "一只小猫" `
+  --out E:\tmp\kitten.png
+```
+
+使用非默认配置文件：
+
+```powershell
+python <skill-dir>\scripts\generate_image.py `
+  --config E:\path\to\my-image-config.json `
   --prompt "一只小猫" `
   --out E:\tmp\kitten.png
 ```
