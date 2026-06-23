@@ -2,3 +2,5 @@
 tmp
 gpt-imagegen/config.local.json
 gpt-imagegen/scripts/__pycache__
+gpt-imagegen/config.json
+output
