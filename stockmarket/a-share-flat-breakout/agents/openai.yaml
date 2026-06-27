@@ -1,0 +1,4 @@
+interface:
+  display_name: "A-Share Flat Breakout"
+  short_description: "Scan A-shares for flat-base volume breakouts."
+  default_prompt: "Use $a-share-flat-breakout to scan today's A-share flat-base breakout candidates."
