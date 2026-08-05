@@ -1,0 +1,6 @@
+{
+  "api_key": "",
+  "base_url": "https://jojocode.com/v1",
+  "api_mode": "auto",
+  "model": "gpt-image-2"
+}
