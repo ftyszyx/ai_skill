@@ -1,0 +1,4 @@
+interface:
+  display_name: "jojo_imagegen"
+  short_description: "使用 JojoCode gpt-image-2 生成并保存图片"
+  default_prompt: "Use $jojo-imagegen to generate a polished image from my prompt and save it to the workspace."
